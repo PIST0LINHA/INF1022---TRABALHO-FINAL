@@ -1,0 +1,7 @@
+dispositivo: {termometro, temperatura}
+dispositivo: {ventilador, potencia}
+
+set temperatura_atual = verificar(temperatura).
+
+se temperatura_atual > 25 entao
+  ligar ventilador.

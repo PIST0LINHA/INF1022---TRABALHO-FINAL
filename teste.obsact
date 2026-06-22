@@ -1,0 +1,7 @@
+dispositivo: {termometro, temperatura}
+dispositivo: {ventilador, potencia}
+dispositivo: {celular}
+
+set temperatura = 40 .
+se temperatura > 25 entao enviar alerta ("Temperatura elevada!")
+  celular . 

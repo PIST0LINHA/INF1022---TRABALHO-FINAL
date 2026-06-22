@@ -1,0 +1,24 @@
+dispositivo: {celular}
+dispositivo: {termometro, temperatura}
+dispositivo: {ventilador, potencia}
+dispositivo: {ar_condicionado, modo}
+
+set temperatura = 40.
+
+se temperatura > 22 entao
+  enviar alerta ("Temperatura elevada!") celular.
+  set estado_ventilador = verificar(ventilador).
+  se estado_ventilador == 0 entao
+    ligar ventilador.
+    set potencia = 90.
+  
+// comentario
+
+set temperatura_atual = verificar(temperatura).
+se temperatura_atual > 35 entao
+  enviar alerta ("Temperatura extremamente alta!", temperatura) celular.
+
+enquanto temperatura_atual > 22 && temperatura_atual < 35 entao
+  enviar alerta ("Temperatura alta!") celular.
+  set temperatura_atual = verificar(temperatura).
+
