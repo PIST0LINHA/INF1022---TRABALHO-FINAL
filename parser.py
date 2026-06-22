@@ -1,36 +1,32 @@
 """
 parser.py
 =========
-Esqueleto do parser ObsAct → Python usando PLY.
+Parser ObsAct que constrói a AST e a converte para Python.
 
-Importa o lexer já pronto (lexer.py).
-Todas as regras da gramática estão aqui com comentários explicando
-onde você deve adicionar a geração de código (marcado com TODO).
+Fluxo:
+    .obsact -> lexer -> tokens -> parser (p_* retornam nós AST)
+            -> Program (raiz) -> Program.codegen() -> .py
 
-ESTRUTURA DE BLOCOS:
-    Comandos simples terminam com '.':
-        set x = 10.
-        ligar ventilador.
-
-    Blocos se/enquanto com múltiplos cmds:
-        se cond entao
-            cmd1.
-            cmd2.
-        senao           ← sem PONTO antes do senao
-            cmd3.
-        .               ← PONTO final fecha o bloco inteiro
-
-    se inline (linha única):
-        se cond entao ligar ventilador.
+Uso:
+    python parser.py programa.obsact
+    python parser.py programa.obsact -o saida.py
 """
 
+import sys
+import os
 import ply.yacc as yacc
-from lexer import tokens, lexer  # importa do seu lexer.py
+from lexer import tokens, lexer
+from ast_nodes import (
+    Program,
+    Device,
+    Attrib,
+    IfCmd,
+    WhileCmd,
+    ActStmt,
+)
 
 # ─────────────────────────────────────────────────────────────────
 # PRECEDÊNCIA
-# Resolve shift/reduce de OBS (&&, ||) e VAR (+, -)
-# Menor prioridade primeiro, maior prioridade por último.
 # ─────────────────────────────────────────────────────────────────
 
 precedence = (
@@ -39,92 +35,97 @@ precedence = (
     ("left", "MAIS", "MENOS"),
 )
 
+# ─────────────────────────────────────────────────────────────────
+# PROGRAM — raiz da AST
+# ─────────────────────────────────────────────────────────────────
+
 
 def p_program(p):
     """program : devices cmds"""
-    # TODO: ponto de entrada — aqui você pode emitir o preâmbulo
-    #       (funções ligar/desligar/verificar/alerta) antes dos cmds
-    pass
+    p[0] = Program(devices=p[1], cmds=p[2])
+
+
+# ─────────────────────────────────────────────────────────────────
+# DEVICES  →  list[Device]
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_devices_multi(p):
     """devices : devices device"""
-    pass
+    p[0] = p[1] + [p[2]]
 
 
 def p_devices_single(p):
     """devices : device"""
-    pass
+    p[0] = [p[1]]
 
 
 def p_device_sensor(p):
     """device : DISPOSITIVO DOIS_PONTOS CHAVE_ESQ NAMEDEVICE VIRGULA NAMEDEVICE CHAVE_DIR"""
-    # dispositivo : { namedevice, observation }
-    namedevice = p[4]  # ex: "Termometro"
-    observation = p[6]  # ex: "temperatura"  ← mesmo token NAMEDEVICE, posição diferente
-    # TODO: emitir inicialização do sensor com valor padrão 0
-    #   ex: codegen.emit(f"{observation} = 0")
-    pass
+    # p[4] = namedevice  |  p[6] = observation
+    p[0] = Device(namedevice=p[4], observation=p[6])
 
 
 def p_device_only(p):
     """device : DISPOSITIVO DOIS_PONTOS CHAVE_ESQ NAMEDEVICE CHAVE_DIR"""
-    # dispositivo : { namedevice }  — sem sensor
-    namedevice = p[4]
-    # TODO: registrar dispositivo sem sensor (se necessário)
-    pass
+    p[0] = Device(namedevice=p[4], observation=None)
+
+
+# ─────────────────────────────────────────────────────────────────
+# CMDS  →  list[Node]   (recursão à esquerda)
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_cmds_multi_simple(p):
     """cmds : cmds simple_cmd PONTO"""
-    pass
+    p[0] = p[1] + [p[2]]
 
 
 def p_cmds_multi_block(p):
     """cmds : cmds block_cmd"""
-    # block_cmd já consumiu seu próprio PONTO de fechamento
-    pass
+    p[0] = p[1] + [p[2]]
 
 
 def p_cmds_single_simple(p):
     """cmds : simple_cmd PONTO"""
-    pass
+    p[0] = [p[1]]
 
 
 def p_cmds_single_block(p):
     """cmds : block_cmd"""
-    pass
+    p[0] = [p[1]]
 
 
 def p_simple_cmd(p):
     """simple_cmd : attrib
     | act_stmt"""
-    pass
+    p[0] = p[1]
 
 
 def p_block_cmd(p):
     """block_cmd : obsact
     | loop"""
-    pass
+    p[0] = p[1]
+
+
+# ─────────────────────────────────────────────────────────────────
+# ATTRIB  →  Attrib
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_attrib_var(p):
     """attrib : SET NAMEDEVICE IGUAL var"""
-    # set observation = VAR
-    sensor = p[2]  # nome do sensor/observation
-    valor = p[4]  # string sintetizada pelas regras de VAR
-    # TODO: codegen.emit(f"{sensor} = {valor}")
-    pass
+    p[0] = Attrib(sensor=p[2], value=p[4])
 
 
 def p_attrib_act(p):
     """attrib : SET NAMEDEVICE IGUAL act_execute"""
-    # set observation = ACT_EXECUTE
-    # ex: set estado = verificar(ventilador)
-    sensor = p[2]
-    chamada = p[4]  # string retornada por p_act_execute_*
-    # TODO: codegen.emit(f"{sensor} = {chamada}")
-    pass
+    p[0] = Attrib(sensor=p[2], value=p[4])
+
+
+# ─────────────────────────────────────────────────────────────────
+# VAR  →  str  (expressão Python pronta)
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_var_num(p):
@@ -144,7 +145,6 @@ def p_var_false(p):
 
 def p_var_namedevice(p):
     """var : NAMEDEVICE"""
-    # permite usar o valor de um sensor como VAR
     p[0] = p[1]
 
 
@@ -156,6 +156,11 @@ def p_var_soma(p):
 def p_var_sub(p):
     """var : var MENOS var"""
     p[0] = f"{p[1]} - {p[3]}"
+
+
+# ─────────────────────────────────────────────────────────────────
+# OBS  →  str  (condição Python pronta)
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_obs_simples(p):
@@ -173,75 +178,76 @@ def p_obs_or(p):
     p[0] = f"({p[1]}) or ({p[3]})"
 
 
+# ─────────────────────────────────────────────────────────────────
+# OBSACT  →  IfCmd
+#
+# if_header carrega a condição como p[0] para o IfCmd pai.
+# Estrutura de PONTO:
+#   bloco:  if_header cmds [else_header cmds] PONTO
+#   inline: if_header act_stmt PONTO
+# ─────────────────────────────────────────────────────────────────
+
+
 def p_if_header(p):
     """if_header : SE obs ENTAO"""
-    # TODO: codegen.emit(f"if {p[2]}:")
-    # TODO: codegen.indent()
-    pass
+    p[0] = p[2]  # condição Python
 
 
 def p_else_header(p):
     """else_header : SENAO"""
-    # TODO: codegen.dedent()
-    # TODO: codegen.emit("else:")
-    # TODO: codegen.indent()
     pass
 
 
-def p_end_block(p):
-    """end_block :"""
-    # Regra vazia executada ao fechar qualquer bloco.
-    # TODO: codegen.dedent()
-    pass
-
-
-# Bloco multi-linha
 def p_obsact_if_bloco(p):
-    """obsact : if_header cmds PONTO end_block"""
-    pass
+    """obsact : if_header cmds PONTO"""
+    p[0] = IfCmd(condition=p[1], then_cmds=p[2])
 
 
 def p_obsact_ifelse_bloco(p):
-    """obsact : if_header cmds else_header cmds PONTO end_block"""
-    # Sem PONTO entre cmds e else_header — o PONTO do último cmd
-    # interno já foi consumido por cmds. O PONTO final fecha o else.
-    pass
+    """obsact : if_header cmds else_header cmds PONTO"""
+    # Sem PONTO antes do else_header — o PONTO final fecha o bloco inteiro
+    p[0] = IfCmd(condition=p[1], then_cmds=p[2], else_cmds=p[4])
 
 
-# Linha única (act_stmt apenas — attrib inline geraria ambiguidade)
 def p_obsact_if_inline(p):
-    """obsact : if_header act_stmt PONTO end_block"""
-    pass
+    """obsact : if_header act_stmt PONTO"""
+    p[0] = IfCmd(condition=p[1], then_cmds=[p[2]])
 
 
 def p_obsact_ifelse_inline(p):
-    """obsact : if_header act_stmt PONTO else_header act_stmt PONTO end_block"""
-    pass
+    """obsact : if_header act_stmt PONTO else_header act_stmt PONTO"""
+    p[0] = IfCmd(condition=p[1], then_cmds=[p[2]], else_cmds=[p[5]])
+
+
+# ─────────────────────────────────────────────────────────────────
+# LOOP  →  WhileCmd
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_while_header(p):
     """while_header : ENQUANTO obs ENTAO"""
-    # TODO: codegen.emit(f"while {p[2]}:")
-    # TODO: codegen.indent()
-    pass
+    p[0] = p[2]
 
 
 def p_loop_bloco(p):
-    """loop : while_header cmds PONTO end_block"""
-    pass
+    """loop : while_header cmds PONTO"""
+    p[0] = WhileCmd(condition=p[1], body_cmds=p[2])
 
 
 def p_loop_inline(p):
-    """loop : while_header act_stmt PONTO end_block"""
-    pass
+    """loop : while_header act_stmt PONTO"""
+    p[0] = WhileCmd(condition=p[1], body_cmds=[p[2]])
+
+
+# ─────────────────────────────────────────────────────────────────
+# ACT  →  ActStmt (empacota uma string Python pronta)
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_act_stmt(p):
     """act_stmt : act_execute
     | act_alert"""
-    # act_execute e act_alert sintetizam strings com o código Python
-    # TODO: emitir p[1]  ex: codegen.emit(p[1])
-    pass
+    p[0] = ActStmt(call=p[1])
 
 
 def p_act_ligar(p):
@@ -261,24 +267,39 @@ def p_act_verificar(p):
 
 def p_alert_simples(p):
     """act_alert : ENVIAR ALERTA PAREN_ESQ STRING PAREN_DIR NAMEDEVICE"""
-    # enviar alerta ("msg") namedevice
     p[0] = f"alerta('{p[6]}', {p[4]})"
+
+
+def p_alert_simples_sem_paren(p):
+    """act_alert : ENVIAR ALERTA STRING NAMEDEVICE"""
+    p[0] = f"alerta('{p[4]}', {p[3]})"
 
 
 def p_alert_com_sensor(p):
     """act_alert : ENVIAR ALERTA PAREN_ESQ STRING VIRGULA NAMEDEVICE PAREN_DIR NAMEDEVICE"""
-    # enviar alerta ("msg", observation) namedevice
-    # p[6] = observation (sensor cujo valor é concatenado à msg)
-    # p[8] = namedevice  (destinatário)
     p[0] = f"alerta('{p[8]}', {p[4]}, {p[6]})"
+
+
+def p_alert_com_sensor_sem_paren(p):
+    """act_alert : ENVIAR ALERTA STRING VIRGULA NAMEDEVICE NAMEDEVICE"""
+    p[0] = f"alerta('{p[6]}', {p[3]}, {p[5]})"
 
 
 def p_alert_broadcast(p):
     """act_alert : ENVIAR ALERTA PAREN_ESQ STRING PAREN_DIR PARA TODOS DOIS_PONTOS devlist"""
-    # enviar alerta ("msg") para todos: dev1, dev2
-    # p[9] = lista Python de nomes de dispositivos
     chamadas = [f"alerta('{d}', {p[4]})" for d in p[9]]
     p[0] = "\n".join(chamadas)
+
+
+def p_alert_broadcast_sem_paren(p):
+    """act_alert : ENVIAR ALERTA STRING PARA TODOS DOIS_PONTOS devlist"""
+    chamadas = [f"alerta('{d}', {p[3]})" for d in p[7]]
+    p[0] = "\n".join(chamadas)
+
+
+# ─────────────────────────────────────────────────────────────────
+# DEVLIST  →  list[str]
+# ─────────────────────────────────────────────────────────────────
 
 
 def p_devlist_multi(p):
@@ -291,6 +312,11 @@ def p_devlist_single(p):
     p[0] = [p[1]]
 
 
+# ─────────────────────────────────────────────────────────────────
+# ERRO
+# ─────────────────────────────────────────────────────────────────
+
+
 def p_error(p):
     if p:
         print(
@@ -301,65 +327,47 @@ def p_error(p):
         print("  Dica: verifique se todos os blocos estão fechados com '.'")
 
 
+# ─────────────────────────────────────────────────────────────────
+# INSTÂNCIA
+# ─────────────────────────────────────────────────────────────────
+
 parser = yacc.yacc()
 
+# ─────────────────────────────────────────────────────────────────
+# PONTO DE ENTRADA
+# ─────────────────────────────────────────────────────────────────
+
+
+def transpilar(source: str, output_path: str) -> None:
+    lexer.lineno = 1
+    ast = parser.parse(source, lexer=lexer)
+
+    if ast is None:
+        print("[ERRO] Parse falhou — arquivo de saída não gerado.")
+        return
+
+    codigo = ast.codegen()
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(codigo)
+        f.write("\n")
+
+    print(f"[OK] Gerado: {output_path}")
+
+
 if __name__ == "__main__":
-    casos = [
-        (
-            "simples",
-            "dispositivo : { Termometro, temperatura }\n"
-            "set temperatura = 40.\n"
-            "se temperatura > 30 entao ligar ventilador.\n",
-        ),
-        (
-            "bloco if/else",
-            "dispositivo : { Termometro, temperatura }\n"
-            "set temperatura = 40.\n"
-            "se temperatura > 30 entao\n"
-            "    set temperatura = 0.\n"
-            "senao\n"
-            "    set temperatura = 10.\n"
-            ".\n",
-        ),
-        (
-            "broadcast",
-            "dispositivo : { monitor }\n"
-            "dispositivo : { celular }\n"
-            'enviar alerta ("Alerta!") para todos: monitor, celular.\n',
-        ),
-        (
-            "enquanto",
-            "dispositivo : { Termometro, temperatura }\n"
-            "set temperatura = 5.\n"
-            "enquanto temperatura > 0 entao\n"
-            "    set temperatura = temperatura - 1.\n"
-            ".\n",
-        ),
-        (
-            "aritmetica",
-            "dispositivo : { lampada, potencia }\n"
-            "set potencia = 10.\n"
-            "set potencia = potencia + 5.\n",
-        ),
-        (
-            "and/or",
-            "dispositivo : { Termometro, temperatura }\n"
-            "dispositivo : { higrometro, umidade }\n"
-            "set temperatura = 35.\n"
-            "set umidade = 60.\n"
-            "se temperatura > 30 && umidade < 80 entao ligar Termometro.\n",
-        ),
-    ]
+    if len(sys.argv) < 2:
+        print("Uso: python parser.py <arquivo.obsact> [-o saida.py]")
+        sys.exit(1)
 
-    print("Testando casos da gramática ObsAct:")
-    print("=" * 40)
-    ok = 0
-    for nome, src in casos:
-        lexer.lineno = 1
-        result = parser.parse(src, lexer=lexer)
-        status = "✓OK" if result is not None else "FALHOU"
-        if result is not None:
-            ok += 1
-        print(f"  {status}  {nome}")
+    input_path = sys.argv[1]
+    output_path = (
+        sys.argv[sys.argv.index("-o") + 1]
+        if "-o" in sys.argv
+        else os.path.splitext(input_path)[0] + ".py"
+    )
 
-    print(f"\n{ok}/{len(casos)} casos passando")
+    with open(input_path, encoding="utf-8") as f:
+        source = f.read()
+
+    transpilar(source, output_path)
